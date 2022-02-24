@@ -7,8 +7,6 @@ from operator import attrgetter
 class Developer:
     skills: dict[str, int]
     name: str
-    available: int = 0
-
 
 @dataclass
 class Project:
@@ -17,7 +15,6 @@ class Project:
     duration: int
     requirements: list[str, int, Optional[Developer]]  # (skill type, skill level)
     name: str
-
 
 @dataclass
 class ScheduledProject:
@@ -104,38 +101,6 @@ def write_output(file, scheduled_projects:list):
 #
 #     return scheduled_projects
 
-def get_developer_skill_map(developers: list[Developer]):
-    skill_map = {}
-    for developer in developers:
-        for skill, level in developer.skills.items():
-            if skill in skill_map:
-                skill_map[skill].append(developer)
-            else:
-                skill_map[skill] = [developer]
-
-    for item in skill_map:
-        skill_map[item].sort(key=lambda x: x.skills[item])
-
-    return skill_map
-
-
-def search_skill_map(skill_map, skill: str, level: int, exclude: list[Developer], start_day):
-    if level == 0:
-        for sk, item in skill_map.items():
-            if sk == skill:
-                continue
-            for dev in item:
-                if dev.available < start_day or dev in exclude:
-                    continue
-                return dev
-
-    for dev in skill_map[skill]:
-        if dev.available < start_day or dev in exclude:
-            continue
-        if dev.skills[skill] >= level:
-            return dev
-    return None
-
 
 def small_dumdum(projects: list[Project], developers: list[Developer]):
     scheduled_projects = []
@@ -143,40 +108,34 @@ def small_dumdum(projects: list[Project], developers: list[Developer]):
     available = [0]*len(developers)  # When all of the devs will be available again
     current_day = 0
 
-    skill_map = get_developer_skill_map(developers)
-
     while True:
         step = min(finish_dates)  # project that's finished earliest
         current_day += step
         finish_dates = [t - step for t in finish_dates if step > t]
         to_remove = []
 
-        for p_idx, project in enumerate(projects):
-        # loop over projects with heuristic
-        # to_check = deepcopy(projects)
-        # while to_check:
-        #     project, remove_idx = get_least_contributors_project(to_check)
-        #     to_check.pop(remove_idx)
-            devs = get_devs_for_project_multiple(current_day, project, skill_map)
+        to_check = deepcopy(projects)
+        while to_check:
+            project, remove_idx = get_least_contributors_project(to_check)
+            to_check.pop(remove_idx)
+            indices = get_devs_for_project_multiple(current_day, project, developers, available)
 
-            if devs is None:
+            if indices is None:
                 continue
 
-            to_remove.append(p_idx)
             scheduled_devs = []
-            for s_idx, dev in enumerate(devs):
-                dev.available = current_day + project.duration
-                project.requirements[s_idx][2] = dev
-                scheduled_devs.append(dev.name)
-                try_learn(dev, project)
+            for s_idx, d_idx in enumerate(indices):
+                available[d_idx] = current_day + project.duration
+                project.requirements[s_idx][2] = developers[d_idx]
+                scheduled_devs.append(developers[d_idx].name)
+                try_learn(developers[d_idx], project)
 
             finish_dates.append(current_day + project.duration)
             scheduled_projects.append(ScheduledProject(project.name, scheduled_devs))
 
         # remove all projects in progress as they are of no use in the system
-        for idx in to_remove[::-1]:
+        for idx in to_remove:
             del projects[idx]
-
         # remove all projects past their deadline
         for idx, project in enumerate(projects):
             if current_day + project.duration > project.deadline + 10:
@@ -185,33 +144,25 @@ def small_dumdum(projects: list[Project], developers: list[Developer]):
         if len(finish_dates) == 0:
             break
 
-    return scheduled_projects
+        return scheduled_projects
 
-
-def get_devs_for_project_multiple(start_day: int, project: Project, skill_map) -> Optional[list[Developer]]:
-    devs = []
+def get_devs_for_project_multiple(start_day: int, project: Project, developers: list[Developer], available: list[int]) -> Optional[list[int]]:
+    indices = []
     count = 0
-    aggregate = {}
 
     # TODO: check for 1 skill level
     for s_idx, (skill, level, _) in enumerate(project.requirements):
+        for d_idx, developer in enumerate(developers):
+            # only, non-duplicate available d
+            if available[d_idx] < start_day or d_idx in indices:
+                continue
 
-        if skill in aggregate and aggregate[skill] > level:
-            level = level - 1
+            if skill in developer.skills and developer.skills[skill] >= level:
+                indices.append(d_idx)
+                count += 1
+                break
 
-        dev = search_skill_map(skill_map, skill, level, devs, start_day)
-        if dev is not None:
-
-            for n_skill, n_level in dev.skills.items():
-                if n_skill in aggregate:
-                    aggregate[n_skill] = max(aggregate[n_skill], n_level)
-                else:
-                    aggregate[n_skill] = n_level
-
-            devs.append(dev)
-            count += 1
-
-    return devs if len(project.requirements) == count else None
+    return indices if len(project.requirements) == count else None
 
 
 def preproces(developers: list[Developer]) -> dict[str, list[int]]:
@@ -242,26 +193,18 @@ def get_least_contributors_project(all_projects: list[Project]):
             least = project
             index = idx
     return least, index
-# find project that requires least contributors
-def get_least_contributors_project(all_projects: list[Project]):
-    least = all_projects[0]
-    index = 0
-    for idx, project in enumerate(all_projects):
-        if len(project.requirements) < len(least.requirements):
-            least = project
-            index = idx
-    return least, index
+
 def try_learn(dev: Developer, project: Project):
     requirements = project.requirements
     for entry in requirements:
         if entry[2] is not None and entry[2].name == dev.name:
             skill = entry[0]
             level = entry[1]
-            if skill not in dev.skills:
-                dev.skills[skill] = 1
-            if dev.skills[skill] <= level:
+            if dev.skills[skill] < level:
                 dev.skills[skill] += 1
             break
+
+
 
 files = ["a_an_example", "b_better_start_small", "c_collaboration", "d_dense_schedule", "e_exceptional_skills", "f_find_great_mentors"]
 # files = ["a_an_example"]
@@ -275,18 +218,15 @@ for file in files:
 
     print(f"Generating output for {file}")
     projects, developers = parse(file)
+    # scheduled_projects = big_dumdum(projects, developers)
 
-    if file in ["e_exceptional_skills"]:
-        projects = sorted(projects, key=lambda project: project.deadline)  # Integer sort
-    if file in ["c_collaboration"]:
-        projects = sorted(projects, key=lambda project: project.points, reverse=True)  # Integer sort
-    if file in ["f_find_great_mentors"]:
-        projects = sorted(projects, key=lambda project: project.duration)  # Integer sort
+    # projects = sorted(projects, key=lambda project: project.deadline)  # Integer sort
+    projects = sorted(projects, key=lambda project: project.points, reverse=True)  # Integer sort
+    # projects = sorted(projects, key=lambda project: project.duration)  # Integer sort
     # projects = sorted(projects, key=lambda project: len(project.requirements))  # Integer sort
 
     developers = sorted(developers, key=lambda developer: len(developer.skills))
 
-    # scheduled_projects = big_dumdum(projects, developers)
     scheduled_projects = small_dumdum(projects, developers)
     write_output(file, scheduled_projects)
     # break
